@@ -109,7 +109,13 @@ Ext.define("portfolio-predictability-productivity", {
             return;
         }
 
-        this.fetchIterations(startDate, endDate).then({
+        this.setLoading(true);
+
+        Deft.Promise.all([
+            this.fetchIterations(startDate, endDate),
+            this.fetchReleases(startDate,endDate, pi)
+
+        ]).then({
             success: function(iterations){
                 this.fetchStorySnapshots(iterations, pi);
             },
@@ -158,15 +164,36 @@ Ext.define("portfolio-predictability-productivity", {
             limit: 'Infinity'
         });
     },
+    fetchReleases: function(startDate, endDate, pi){
+        return CArABU.technicalservices.Utility.fetchWsapiRecords({
+            model: 'HierarchicalRequirement',
+            fetch: ['Name','ObjectID','PlanEstimate','AcceptedDate','Project','Release'],
+            filters: [{
+                property: 'Release.ReleaseDate',
+                operator: "<",
+                value: Rally.util.DateTime.toIsoString(endDate)
+            },{
+                property: 'Release.ReleaseDate',
+                operator: ">=",
+                value: Rally.util.DateTime.toIsoString(startDate)
+            },{
+                property: this.getFeatureFieldName() + ".ObjectID",
+                value: pi.get('ObjectID')
+            }],
+            limit: 'Infinity'
+        });
+    },
     getStartDateOffset: function(){
         return this.getSetting('iterationStartOffsetDays') || 0;
     },
     getEndDateOffset: function(){
         return this.getSetting('iterationEndOffsetDays') || 0;
     },
-
-    fetchStorySnapshots: function(iterations, pi){
-        this.logger.log('fetchStorySnapshots',iterations, pi);
+    getStorySnapshotFetchList: function(){
+        return ['ObjectID','Iteration','Release','PlanEstimate','ScheduleState','AcceptedDate','TaskEstimateTotal','TaskRemainingTotal','Project','_ValidFrom','_ValidTo'];
+    },
+    fetchStorySnapshots: function(iterationsAndReleases, pi){
+        this.logger.log('fetchStorySnapshots',iterationsAndReleases, pi);
 
         CArABU.technicalservices.Utility.fetchSnapshots({
                  find: {
@@ -175,30 +202,31 @@ Ext.define("portfolio-predictability-productivity", {
                      _ValidTo: {$gte: this.getStartDate()},
                      _ValidFrom: {$lte: this.getEndDate()},
                      Iteration: {$ne: null}
-                   //  Iteration: {$in: iterations}
                  },
-                 fetch: ['ObjectID','Iteration','PlanEstimate','ScheduleState','AcceptedDate','TaskEstimateTotal','TaskRemainingTotal','Project','_ValidFrom','_ValidTo'],
+                 fetch: this.getStorySnapshotFetchList(),
                  hydrate: ['Project']
         }).then({
             success: function(snapshots){
-                this.processSnapshots(snapshots, iterations, pi);
+                this.processSnapshots(snapshots, iterationsAndReleases, pi);
             },
             failure: this.showErrorNotification,
             scope: this
-        });
-
-
+        }).always(function(){
+            this.setLoading(false);
+        }, this);
     },
-
     snapSpansDate: function(snap, targetDate){
         var validFrom = Rally.util.DateTime.fromIsoString(snap._ValidFrom),
             validTo = Rally.util.DateTime.fromIsoString(snap._ValidTo);
 
-        this.logger.log('snapSpansDate',snap.ObjectID, validFrom, validTo, targetDate,validFrom < targetDate && validTo > targetDate);
+        //this.logger.log('snapSpansDate',snap.ObjectID, validFrom, validTo, targetDate,validFrom < targetDate && validTo > targetDate);
         return validFrom < targetDate && validTo > targetDate;
     },
-    processSnapshots: function(snapshots, iterations, pi){
-        this.logger.log('processSnapshots', snapshots, iterations, pi);
+    processSnapshots: function(snapshots, iterationsAndReleases, pi){
+        this.logger.log('processSnapshots', snapshots, iterationsAndReleases, pi);
+
+        var iterations = iterationsAndReleases[0],
+            releaseStories = iterationsAndReleases[1];
 
         var iterationHash = {};
         Ext.Array.each(iterations, function(i){
@@ -210,7 +238,9 @@ Ext.define("portfolio-predictability-productivity", {
             var snap = snapshots[i].getData();
 
             var iteration = iterationHash[snap.Iteration];
-            console.log('in loop', snap.Iteration, iteration, iterationHash);
+
+            this.processSnapForTimebox(projectHash, iteration, 'Iteration',snap,'StartDate','EndDate');
+
             if (iteration){ //We only want to add to our hash if the iteration is relevant
                 var projectName = snap.Project.Name,
                     adjustedStartDate = Rally.util.DateTime.add(iteration.StartDate,'day',this.getStartDateOffset()),
@@ -235,14 +265,45 @@ Ext.define("portfolio-predictability-productivity", {
                 }
             }
         }
-        this.logger.log('projectHash', projectHash);
 
+       this.logger.log('projectHash', projectHash);
 
+        var data = this.buildCustomData(projectHash, releaseStories, pi);
+        this.addGrid(data);
+
+    },
+    buildCustomData: function(projectHash, releaseStories, pi){
         var data = [],
             totalPlanEstimate = 0,
             totalAcceptedPlanEstimate = 0,
             totalTaskPlan = 0,
-            totalTaskToDo = 0;
+            totalTaskToDo = 0,
+            projectReleaseHash = {},
+            totalReleaseAccepted = 0,
+            totalReleasePoints = 0;
+
+
+        for (var i=0; i< releaseStories.length; i++){
+            var story = releaseStories[i].getData(),
+                project = story.Project && story.Project.Name,
+                release = story.Release && story.Release.ObjectID;
+
+            if (project && release){
+                if (!projectReleaseHash[project]){
+                    projectReleaseHash[project] = {};
+                }
+                if (!projectReleaseHash[project][release]){
+                    projectReleaseHash[project][release] = [];
+                }
+                projectReleaseHash[project][release].push(story);
+            } else {
+                this.logger.log('buildCustomData no Release or Project', story);
+            }
+
+
+
+        }
+
         Ext.Object.each(projectHash, function(projectName, iterations){
 
             var row = {
@@ -267,12 +328,32 @@ Ext.define("portfolio-predictability-productivity", {
                 });
             });
 
+            var releases = projectReleaseHash[projectName];
+            var releaseAccepted = 0,
+                releasePoints = 0;
+            Ext.Object.each(releases, function(releaseId, stories){
+
+                Ext.Array.each(stories, function(s){
+                    if (s.AcceptedDate){
+                        releaseAccepted += s.PlanEstimate;
+                    }
+                    releasePoints += s.PlanEstimate;
+                });
+            });
+
+
+            row.isTotal = false;
             row.planEstimate = plan;
             row.acceptedPlanEstimate = accepted;
             row.taskPlan = taskPlan;
             row.taskToDo = taskToDo;
             row.productivity = plan ? accepted/plan : 0;
             row.predictability = taskPlan ? (taskPlan - taskToDo)/taskPlan : 0;
+
+            row.releaseAccepted = releaseAccepted;
+            row.releasePoints = releasePoints;
+            row.releaseProductivity = releasePoints ? releaseAccepted/releasePoints : 0;
+
             data.push(row);
 
 
@@ -280,135 +361,71 @@ Ext.define("portfolio-predictability-productivity", {
             totalAcceptedPlanEstimate += accepted;
             totalTaskPlan += taskPlan;
             totalTaskToDo += taskToDo;
+            totalReleaseAccepted += releaseAccepted;
+            totalReleasePoints += releasePoints;
         });
         var totalRow = {
+            isTotal: true,
             project: pi.get('Name'),
             planEstimate: totalPlanEstimate,
             acceptedPlanEstimate: totalAcceptedPlanEstimate,
             taskPlan: totalTaskPlan,
             taskToDo: totalTaskToDo,
             productivity: totalPlanEstimate ? totalAcceptedPlanEstimate/totalPlanEstimate : 0,
-            predictability: totalTaskPlan ? (totalTaskPlan - totalTaskToDo)/totalTaskPlan : 0
+            predictability: totalTaskPlan ? (totalTaskPlan - totalTaskToDo)/totalTaskPlan : 0,
+            releaseAccepted: totalReleaseAccepted,
+            releasePoints: totalReleasePoints,
+            releaseProductivity: totalReleasePoints ? totalReleaseAccepted/totalReleasePoints : 0
         };
         data.unshift(totalRow);
         this.logger.log('processSnapshots data' ,data);
-        this.addGrid(data);
-
-
+        return data;
     },
+    processSnapForTimebox: function(projectHash, timebox, timeboxField, snap, startDateField, endDateField){
+        if (timebox){ //We only want to add to our hash if the iteration is relevant
+            var projectName = snap.Project.Name,
+                adjustedStartDate = Rally.util.DateTime.add(timebox[startDateField],'day',this.getStartDateOffset()),
+                adjustedEndDate = Rally.util.DateTime.add(timebox[endDateField],'day',this.getEndDateOffset());;
+           // console.log('in if loop', timebox.Name, projectName, adjustedStartDate, adjustedEndDate);
+            if (!projectHash[projectName]){
+                projectHash[projectName] = {};
+            }
 
-    //fetchStories: function(pi){
-    //
-    //    var filters = this.getPortfolioFilter(pi);
-    //
-    //    var iterationFilters = Rally.data.wsapi.Filter.and([{
-    //            property: 'Iteration.EndDate',
-    //            operator: '<=',
-    //            value: Rally.util.DateTime.toIsoString(this.getEndDate())
-    //        },{
-    //            property: 'Iteration.EndDate',
-    //            operator: '>=',
-    //            value: Rally.util.DateTime.toIsoString(this.getStartDate())
-    //        }]);
-    //
-    //    filters = filters.and(iterationFilters)
-    //    this.logger.log('fetchStories', filters.toString());
-    //
-    //    CArABU.technicalservices.Utility.fetchWsapiRecords({
-    //        model: 'HierarchicalRequirement',
-    //        fetch: ['ObjectID','Project','Iteration','StartDate','EndDate', 'PlanEstimate','ScheduleState','AcceptedDate','TaskEstimateTotal','TaskRemainingTotal'],
-    //        filters: filters,
-    //        limit: 'Infinity',
-    //        pageSize: 2000
-    //    }).then({
-    //        success: this.buildStore,
-    //        failure: this.showErrorNotification,
-    //        scope: this
-    //    })
-    //
-    //},
-    //
-    //buildStore: function(records){
-    //    this.logger.log('buildStore', records);
-    //
-    //    var iterationHash = {},
-    //        projectIterationHash = {};
-    //
-    //    Ext.Array.each(records, function(r){
-    //        var pname = r.get('Project').Name;
-    //        var ioid = r.get('Iteration').ObjectID;
-    //
-    //        if (!projectIterationHash[pname]){
-    //            projectIterationHash[pname] = [];
-    //        }
-    //        projectIterationHash[pname].push(ioid);
-    //
-    //        if (!iterationHash[ioid]){
-    //            iterationHash[ioid] = [];
-    //        }
-    //        iterationHash[ioid].push(r);
-    //    });
-    //
-    //    var data = [],
-    //        totalPlanEstimate = 0,
-    //        totalAcceptedPlanEstimate = 0,
-    //        totalTaskPlan = 0,
-    //        totalTaskToDo = 0;
-    //
-    //    Ext.Object.each(projectIterationHash, function(project,iterationOids){
-    //        var row = {project: project};
-    //        var planEstimate = 0,
-    //            acceptedPlanEstimate = 0,
-    //            taskPlan = 0,
-    //            taskToDo = 0;
-    //
-    //        Ext.Array.each(iterationOids, function(i){
-    //            Ext.Array.each(iterationHash[i] || [], function(r){
-    //                planEstimate += r.get('PlanEstimate') || 0;
-    //                if (r.get('AcceptedDate')){
-    //                    acceptedPlanEstimate += r.get('PlanEstimate') || 0;
-    //                }
-    //
-    //                taskPlan += r.get('TaskEstimateTotal') || 0;
-    //                taskToDo += r.get('TaskRemainingTotal') || 0;
-    //            });
-    //        });
-    //        row.planEstimate = planEstimate;
-    //        row.acceptedPlanEstimate = acceptedPlanEstimate;
-    //        row.productivity = planEstimate ? acceptedPlanEstimate/planEstimate : 0;
-    //        row.taskPlan = taskPlan;
-    //        row.taskToDo = taskToDo;
-    //        row.predictability = taskPlan? (taskPlan - taskToDo)/taskPlan : 0;
-    //        data.push(row);
-    //
-    //        totalPlanEstimate += planEstimate;
-    //        totalAcceptedPlanEstimate += acceptedPlanEstimate;
-    //        totalTaskPlan += taskPlan;
-    //        totalTaskToDo += taskToDo;
-    //
-    //    });
-    //
-    //    var totalRow = {
-    //        project: pi.get('Name'),
-    //        planEstimate: totalPlanEstimate,
-    //        acceptedPlanEstimate: totalAcceptedPlanEstimate,
-    //        taskPlan: totalTaskPlan,
-    //        taskToDo: totalTaskToDo,
-    //        productivity: totalPlanEstimate ? totalAcceptedPlanEstimate/totalPlanEstimate : 0,
-    //        predictivity: totalTaskPlan ? (totalTaskPlan - totalTaskToDo)/totalTaskPlan : 0
-    //    };
-    //    data.unshift(totalRow);
-    //    this.logger.log('buildStore data' ,data);
-    //    this.addGrid(data);
-    //
-    //},
+            if (!projectHash[projectName][snap[timeboxField]]){
+                projectHash[projectName][snap[timeboxField]] = {
+                    startSnaps: [],
+                    endSnaps: []
+                }
+            }
+
+            if (this.snapSpansDate(snap, adjustedStartDate)) {
+                projectHash[projectName][snap[timeboxField]].startSnaps.push(snap);
+            }
+            if (this.snapSpansDate(snap, adjustedEndDate)){
+                projectHash[projectName][snap[timeboxField]].endSnaps.push(snap);
+            }
+        }
+    },
     addGrid: function(data){
         this.getDisplayBox().add({
             xtype: 'rallygrid',
             store: Ext.create('Rally.data.custom.Store',{
                 data: data,
-                fields: ['project','planEstimate','acceptedPlanEstimate','productivity','taskPlan','taskToDo','predictability']
+                fields: [
+                    'isTotal',
+                    'project',
+                    'planEstimate',
+                    'acceptedPlanEstimate',
+                    'productivity',
+                    'taskPlan',
+                    'taskToDo',
+                    'predictability',
+                    'releasePoints',
+                    'releaseAccepted',
+                    'releaseProductivity'
+                ]
             }),
+            margin: '25 0 0 0',
             columnCfgs: this.getColumnCfgs(),
             pageSize: data.length,
             showPagingToolbar: false,
@@ -419,33 +436,84 @@ Ext.define("portfolio-predictability-productivity", {
         return [{
             dataIndex: 'project',
             text: 'Team',
-            flex: 1
+            flex: 1,
+            renderer: this.styleRenderer
         },{
-            dataIndex: 'planEstimate',
-            text: 'Plan'
+            text: 'Iteration Productivity',
+            columns: [{
+                dataIndex: 'planEstimate',
+                text: 'Plan',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'acceptedPlanEstimate',
+                text: 'Accepted',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'productivity',
+                text: '%',
+                renderer: this.percentRenderer,
+                menuDisabled: true
+            }]
         },{
-            dataIndex: 'acceptedPlanEstimate',
-            text: 'Accepted'
+            text: 'Iteration Predictability',
+            columns: [{
+                dataIndex: 'taskPlan',
+                text: 'Plan',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'taskToDo',
+                text: 'To Do',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'predictability',
+                text: '%',
+                renderer: this.percentRenderer,
+                menuDisabled: true
+            }]
         },{
-            dataIndex: 'productivity',
-            text: '%',
-            renderer: this.percentRenderer
-        },{
-            dataIndex: 'taskPlan',
-            text: 'Plan'
-        },{
-            dataIndex: 'taskToDo',
-            text: 'To Do'
-        },{
-            dataIndex: 'predictability',
-            text: '%',
-            renderer: this.percentRenderer
+            text: 'Release Productivity',
+            columns: [{
+                dataIndex: 'releasePoints',
+                text: 'Release Scheduled',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'releaseAccepted',
+                text: 'Release Completed',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'releaseProductivity',
+                text: '%',
+                renderer: this.percentRenderer,
+                menuDisabled: true
+            }]
         }];
     },
-    percentRenderer: function(v){
+    styleRenderer: function(v,m,r){
+        if (r.get('isTotal')){
+            m.tdCls = 'total-row'
+        }
+        return v;
+    },
+    percentRenderer: function(v,m){
+         if (v > .85 && v < 1.15){
+             m.tdCls = 'green-threshold';
+         } else if ((v > .75) && (v < 1.25)){
+             m.tdCls = 'yellow-threshold';
+         } else {
+             m.tdCls = 'red-threshold';
+         }
+        console.log('v',v, m.tdCls);
+
         return Math.round((v || 0) * 100) + "%";
     },
     showErrorNotification: function(msg){
+        this.setLoading(false);
         Rally.ui.notify.Notifier.showError({message: msg});
     },
     showNoData: function(msg){

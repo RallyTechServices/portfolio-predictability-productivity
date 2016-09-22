@@ -26,6 +26,8 @@ Ext.define('CArABU.technicalservices.Utility',{
     fetchWsapiRecords: function(config){
         var deferred = Ext.create('Deft.Deferred');
 
+        config.pageSize = 2000;
+
         Ext.create('Rally.data.wsapi.Store', config).load({
             callback: function(records, operation, success){
                 if (success){
