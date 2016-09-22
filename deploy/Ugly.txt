@@ -3,10 +3,10 @@
 <head>
     <title>Portfolio Predictability Productivity</title>
     <!--  (c) 2016 CA Technologies.  All Rights Reserved. -->
-    <!--  Build Date: Thu Sep 15 2016 08:59:17 GMT-0600 (MDT) -->
+    <!--  Build Date: Thu Sep 22 2016 08:24:34 GMT-0600 (MDT) -->
     
     <script type="text/javascript">
-        var APP_BUILD_DATE = "Thu Sep 15 2016 08:59:17 GMT-0600 (MDT)";
+        var APP_BUILD_DATE = "Thu Sep 22 2016 08:24:34 GMT-0600 (MDT)";
         var CHECKSUM = [%= checksum %];
     </script>
     
@@ -25,6 +25,7 @@
     <style type="text/css">
 
 .app {
+
 }
 .tsinfolink {
     position:absolute;
@@ -40,6 +41,21 @@
     margin-top: 25px;
     margin-right: 5px;
     cursor: pointer;
+}
+.total-row {
+    font-size: 12px;
+    background-color: lightgray;
+    color: #222222;
+    text-transform: uppercase;
+}
+.green-threshold {
+    background-color: #b2e3b6!important;
+}
+.yellow-threshold {
+    background-color: #FFDD82!important;
+}
+.red-threshold {
+    background-color: #F2D3D0!important;
 }
     </style>
 

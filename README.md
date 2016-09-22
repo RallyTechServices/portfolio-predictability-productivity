@@ -1,5 +1,16 @@
 #Portfolio Predictability Productivity
 
+For a selected Portfolio Item (first 2 levels) and a date range, it shows the following:
+
+Iteration Productivity
+This shows the number of stories accepted over the number of stories committed to their iteration that ends in the 
+
+
+
+
+Iteration Predictability
+
+
 ## Development Notes
 
 ### First Load
