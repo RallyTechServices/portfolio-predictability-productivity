@@ -32,6 +32,8 @@ Ext.define("portfolio-predictability-productivity", {
         this.portfolioItemTypes = portfolioItemTypes;
         this.logger.log('addPortfolioPicker', portfolioItemTypes,portfolioItemTypes.slice(0,2));
 
+        this.getSelectorBox().removeAll();
+
         this.getSelectorBox().add({
             xtype: 'rallyartifactsearchcombobox',
             width: 500,
@@ -152,6 +154,7 @@ Ext.define("portfolio-predictability-productivity", {
         return CArABU.technicalservices.Utility.fetchWsapiRecords({
             model: 'Iteration',
             fetch: ['Name','ObjectID','StartDate','EndDate'],
+            context: { project: null },
             filters: [{
                 property: 'EndDate',
                 operator: "<",
@@ -165,9 +168,18 @@ Ext.define("portfolio-predictability-productivity", {
         });
     },
     fetchReleases: function(startDate, endDate, pi){
+
+        var piProperty = this.getFeatureFieldName();
+        if (pi.get('_type').toLowerCase() === this.portfolioItemTypes[1].toLowerCase()){
+            piProperty = piProperty + ".Parent";
+        }
+        piProperty = piProperty + ".ObjectID";
+        this.logger.log('fetchReleases', piProperty, pi.get('_type'),this.portfolioItemTypes[1]);
+
         return CArABU.technicalservices.Utility.fetchWsapiRecords({
             model: 'HierarchicalRequirement',
             fetch: ['Name','ObjectID','PlanEstimate','AcceptedDate','Project','Release'],
+            context: { project: null },
             filters: [{
                 property: 'Release.ReleaseDate',
                 operator: "<",
@@ -177,7 +189,7 @@ Ext.define("portfolio-predictability-productivity", {
                 operator: ">=",
                 value: Rally.util.DateTime.toIsoString(startDate)
             },{
-                property: this.getFeatureFieldName() + ".ObjectID",
+                property: piProperty,
                 value: pi.get('ObjectID')
             }],
             limit: 'Infinity'
@@ -245,7 +257,7 @@ Ext.define("portfolio-predictability-productivity", {
                 var projectName = snap.Project.Name,
                     adjustedStartDate = Rally.util.DateTime.add(iteration.StartDate,'day',this.getStartDateOffset()),
                     adjustedEndDate = Rally.util.DateTime.add(iteration.EndDate,'day',this.getEndDateOffset());;
-                console.log('in if loop', iteration.Name, projectName, adjustedStartDate, adjustedEndDate);
+
                 if (!projectHash[projectName]){
                     projectHash[projectName] = {};
                 }
@@ -268,8 +280,11 @@ Ext.define("portfolio-predictability-productivity", {
 
        this.logger.log('projectHash', projectHash);
 
-        var data = this.buildCustomData(projectHash, releaseStories, pi);
-        this.addGrid(data);
+        //var data = this.buildCustomData(projectHash, releaseStories, pi);
+        //this.addGrid(data);
+        //
+        var data = this.buildCustomTreeData(projectHash, releaseStories, pi, iterationHash);
+        this.addTreeGrid(data);
 
     },
     buildCustomData: function(projectHash, releaseStories, pi){
@@ -432,10 +447,256 @@ Ext.define("portfolio-predictability-productivity", {
             showRowActionsColumn: false
         });
     },
+    buildCustomTreeData: function(projectHash, releaseStories, pi, iterationData){
+        var data = [],
+            totalPlanEstimate = 0,
+            totalAcceptedPlanEstimate = 0,
+            totalTaskPlan = 0,
+            totalTaskToDo = 0,
+            projectReleaseHash = {},
+            totalReleaseAccepted = 0,
+            totalReleasePoints = 0;
+
+
+        for (var i=0; i< releaseStories.length; i++){
+            var story = releaseStories[i].getData(),
+                project = story.Project && story.Project.Name,
+                release = story.Release && story.Release.ObjectID;
+
+            if (project && release){
+                if (!projectReleaseHash[project]){
+                    projectReleaseHash[project] = {};
+                }
+                if (!projectReleaseHash[project][release]){
+                    projectReleaseHash[project][release] = [];
+                }
+                projectReleaseHash[project][release].push(story);
+            } else {
+                this.logger.log('buildCustomData no Release or Project', story);
+            }
+        }
+
+        Ext.Object.each(projectHash, function(projectName, iterations){
+            var row = {
+                    project: projectName,
+                },
+                plan = 0,
+                accepted = 0,
+                taskPlan = 0,
+                taskToDo = 0,
+                children = [];
+
+            Ext.Object.each(iterations, function(iterationId, snaps){
+                var iterationName = iterationData[iterationId] && iterationData[iterationId].Name || "Unkonwn (" + iterationId + ")";
+                var child = {
+                    project: iterationName,
+                    isTotal: false,
+                        releaseAccepted: null,
+                        releasePoints: null,
+                        releaseProductivity: null,
+                        planEstimate: 0,
+                        acceptedPlanEstimate: 0,
+                        productivity: 0,
+                        taskPlan: 0,
+                        taskToDo: 0,
+                        predictability: 0,
+                        leaf: true
+                    };
+
+                Ext.Array.each(snaps.startSnaps, function(s){
+                    child.planEstimate += s.PlanEstimate || 0;
+                    child.taskPlan += s.TaskEstimateTotal || 0;
+                    plan += s.PlanEstimate || 0;
+                    taskPlan += s.TaskEstimateTotal || 0;
+                });
+
+                Ext.Array.each(snaps.endSnaps, function(s){
+                    if (s.AcceptedDate){
+                        child.acceptedPlanEstimate += s.PlanEstimate || 0;
+                        accepted += s.PlanEstimate || 0;
+                    }
+                    child.taskToDo += s.TaskRemainingTotal || 0;
+                    taskToDo += s.TaskRemainingTotal || 0;
+                });
+
+                if (child.planEstimate){
+                    child.productivity = child.acceptedPlanEstimate/child.planEstimate;
+                }
+                if (child.taskPlan){
+                    child.predictability = (child.taskPlan - child.taskToDo)/child.taskPlan;
+                }
+                children.push(child);
+            });
+
+            var releases = projectReleaseHash[projectName];
+            var releaseAccepted = 0,
+                releasePoints = 0;
+            Ext.Object.each(releases, function(releaseId, stories){
+                var releaseName = stories.length > 0 && stories[0].Release && stories[0].Release.Name || "Release " + releaseId;
+
+                var child = {
+                    isTotal: false,
+                    project: releaseName,
+                    releaseAccepted: 0,
+                    releasePoints: 0,
+                    releaseProductivity: 0,
+                    planEstimate: null,
+                    acceptedPlanEstimate: null,
+                    productivity: null,
+                    taskPlan: null,
+                    taskToDo: null,
+                    predictability: null,
+                    leaf: true
+                };
+                Ext.Array.each(stories, function(s){
+                    if (s.AcceptedDate){
+                        child.releaseAccepted += s.PlanEstimate;
+                        releaseAccepted += s.PlanEstimate;
+                    }
+                    child.releasePoints += s.PlanEstimate;
+                    releasePoints += s.PlanEstimate;
+                });
+
+                if (child.releasePoints){
+                    child.releaseProductivity = child.releaseAccepted/child.releasePoints;
+                }
+                children.push(child);
+            });
+
+            row.isTotal = false;
+            row.planEstimate = plan;
+            row.acceptedPlanEstimate = accepted;
+            row.taskPlan = taskPlan;
+            row.taskToDo = taskToDo;
+            row.productivity = plan ? accepted/plan : 0;
+            row.predictability = taskPlan ? (taskPlan - taskToDo)/taskPlan : 0;
+
+            row.releaseAccepted = releaseAccepted;
+            row.releasePoints = releasePoints;
+            row.releaseProductivity = releasePoints ? releaseAccepted/releasePoints : 0;
+            row.children = children;
+
+            data.push(row);
+
+
+            totalPlanEstimate += plan;
+            totalAcceptedPlanEstimate += accepted;
+            totalTaskPlan += taskPlan;
+            totalTaskToDo += taskToDo;
+            totalReleaseAccepted += releaseAccepted;
+            totalReleasePoints += releasePoints;
+        });
+        var totalRow = {
+            isTotal: true,
+            project: pi.get('Name'),
+            planEstimate: totalPlanEstimate,
+            acceptedPlanEstimate: totalAcceptedPlanEstimate,
+            taskPlan: totalTaskPlan,
+            taskToDo: totalTaskToDo,
+            productivity: totalPlanEstimate ? totalAcceptedPlanEstimate/totalPlanEstimate : 0,
+            predictability: totalTaskPlan ? (totalTaskPlan - totalTaskToDo)/totalTaskPlan : 0,
+            releaseAccepted: totalReleaseAccepted,
+            releasePoints: totalReleasePoints,
+            releaseProductivity: totalReleasePoints ? totalReleaseAccepted/totalReleasePoints : 0,
+            children: data
+        };
+
+        //data.unshift(totalRow);
+        this.logger.log('processSnapshots data' ,totalRow);
+        return [totalRow];
+    },
+    addTreeGrid: function(data){
+
+        var store = Ext.create('Ext.data.TreeStore', {
+            root: {
+                children: data,
+                expanded: false
+            },
+            model: CArABU.technicalservices.TeamTimeboxTreeModel
+        });
+
+
+        this.getDisplayBox().add({
+            xtype: 'treepanel',
+            itemId: 'summary-grid',
+            cls: 'rally-grid',
+            padding: 25,
+
+            store: store,
+            rootVisible: false,
+            columns: this.getTreeColumnCfgs()
+        });
+    },
+    getTreeColumnCfgs: function(){
+        return [{
+            xtype: 'treecolumn',
+            text: 'Team / Timebox',
+            menuDisabled: true,
+            dataIndex: 'project',
+            flex: 1,
+            minWidth: 200
+
+        },{
+            text: 'Iteration Productivity',
+            columns: [{
+                dataIndex: 'planEstimate',
+                text: 'Plan',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'acceptedPlanEstimate',
+                text: 'Accepted',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'productivity',
+                text: '%',
+                renderer: this.percentRenderer,
+                menuDisabled: true
+            }]
+        },{
+            text: 'Iteration Predictability',
+            columns: [{
+                dataIndex: 'taskPlan',
+                text: 'Plan',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'taskToDo',
+                text: 'To Do',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'predictability',
+                text: '%',
+                renderer: this.percentRenderer,
+                menuDisabled: true
+            }]
+        },{
+            text: 'Release Productivity',
+            columns: [{
+                dataIndex: 'releasePoints',
+                text: 'Release Scheduled',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'releaseAccepted',
+                text: 'Release Completed',
+                renderer: this.styleRenderer,
+                menuDisabled: true
+            },{
+                dataIndex: 'releaseProductivity',
+                text: '%',
+                renderer: this.percentRenderer,
+                menuDisabled: true
+            }]
+        }];
+    },
+
     getColumnCfgs: function(){
         return [{
             dataIndex: 'project',
-            text: 'Team',
+            text: 'Team / Timebox',
             flex: 1,
             renderer: this.styleRenderer
         },{
@@ -527,6 +788,20 @@ Ext.define("portfolio-predictability-productivity", {
             html: '<div class="no-data-container"><div class="secondary-message">' + msg + '</div></div>'
         });
     },
+    getSettingsFields: function(){
+
+        return [{
+            name: 'iterationStartOffsetDays',
+            xtype: 'rallynumberfield',
+            fieldLabel: 'Offset from Iteration Start (days)',
+            labelWidth: 200
+        },{
+            name: 'iterationEndOffsetDays',
+            xtype: 'rallynumberfield',
+            fieldLabel: 'Offset from Iteration End (days)',
+            labelWidth: 200
+        }];
+    },
     getOptions: function() {
         return [
             {
@@ -536,17 +811,13 @@ Ext.define("portfolio-predictability-productivity", {
             }
         ];
     },
-    
     _launchInfo: function() {
         if ( this.about_dialog ) { this.about_dialog.destroy(); }
         this.about_dialog = Ext.create('Rally.technicalservices.InfoLink',{});
     },
-    
     isExternal: function(){
         return typeof(this.getAppId()) == 'undefined';
     },
-    
-    //onSettingsUpdate:  Override
     onSettingsUpdate: function (settings){
         this.logger.log('onSettingsUpdate',settings);
         // Ext.apply(this, settings);

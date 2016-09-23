@@ -3,10 +3,10 @@
 <head>
     <title>Portfolio Predictability Productivity</title>
     <!--  (c) 2016 CA Technologies.  All Rights Reserved. -->
-    <!--  Build Date: Thu Sep 22 2016 08:24:34 GMT-0600 (MDT) -->
+    <!--  Build Date: Fri Sep 23 2016 12:58:07 GMT-0600 (MDT) -->
     
     <script type="text/javascript">
-        var APP_BUILD_DATE = "Thu Sep 22 2016 08:24:34 GMT-0600 (MDT)";
+        var APP_BUILD_DATE = "Fri Sep 23 2016 12:58:07 GMT-0600 (MDT)";
         var CHECKSUM = [%= checksum %];
     </script>
     
@@ -56,6 +56,9 @@
 }
 .red-threshold {
     background-color: #F2D3D0!important;
+}
+.x-box-inner {
+    border-bottom: 1px solid #888;
 }
     </style>
 
