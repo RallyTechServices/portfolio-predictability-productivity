@@ -3,12 +3,12 @@
 <head>
     <title>Portfolio Predictability Productivity</title>
     <!--  (c) 2016 CA Technologies.  All Rights Reserved. -->
-    <!--  Build Date: Fri Sep 23 2016 12:57:06 GMT-0600 (MDT) -->
+    <!--  Build Date: Fri Sep 23 2016 12:58:06 GMT-0600 (MDT) -->
     
     <script type="text/javascript">
-        var APP_BUILD_DATE = "Fri Sep 23 2016 12:57:06 GMT-0600 (MDT)";
+        var APP_BUILD_DATE = "Fri Sep 23 2016 12:58:06 GMT-0600 (MDT)";
         var BUILDER = "kcorkan";
-        var CHECKSUM = 28831821238;
+        var CHECKSUM = 28910693504;
     </script>
     
     <script type="text/javascript" src="/apps/2.1/sdk.js"></script>
@@ -353,6 +353,8 @@ Ext.define("portfolio-predictability-productivity", {
         this.portfolioItemTypes = portfolioItemTypes;
         this.logger.log('addPortfolioPicker', portfolioItemTypes,portfolioItemTypes.slice(0,2));
 
+        this.getSelectorBox().removeAll();
+
         this.getSelectorBox().add({
             xtype: 'rallyartifactsearchcombobox',
             width: 500,
@@ -576,7 +578,7 @@ Ext.define("portfolio-predictability-productivity", {
                 var projectName = snap.Project.Name,
                     adjustedStartDate = Rally.util.DateTime.add(iteration.StartDate,'day',this.getStartDateOffset()),
                     adjustedEndDate = Rally.util.DateTime.add(iteration.EndDate,'day',this.getEndDateOffset());;
-                
+
                 if (!projectHash[projectName]){
                     projectHash[projectName] = {};
                 }
