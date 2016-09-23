@@ -31,3 +31,6 @@
 .red-threshold {
     background-color: #F2D3D0!important;
 }
+.x-box-inner {
+    border-bottom: 1px solid #888;
+}
