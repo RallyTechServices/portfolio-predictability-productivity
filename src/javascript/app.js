@@ -18,6 +18,26 @@ Ext.define("portfolio-predictability-productivity", {
             iterationEndOffsetDays: 0
         }
     },
+    thresholds: {
+        productivity: {
+            greenLow:.85,
+            greenHigh: 1.15,
+            yellowLow:.60,
+            yellowHigh: 1.25
+        },
+        predictability: {
+            greenLow:.80,
+            greenHigh: 1.20,
+            yellowLow:.80,
+            yellowHigh: 1.20
+        },
+        releaseProductivity: {
+            greenLow:.85,
+            greenHigh: 1.15,
+            yellowLow:.60,
+            yellowHigh: 1.25
+        }
+    },
                         
     launch: function() {
 
@@ -238,7 +258,7 @@ Ext.define("portfolio-predictability-productivity", {
         if (!Ext.isArray(timeboxValues)){
             timeboxValues = [timeboxValues];
         }
-        console.log('getSnapsForData', timeboxField, timeboxValues,snapshots);
+    //    console.log('getSnapsForData', timeboxField, timeboxValues,snapshots);
         for (var i=0; i<snapshots.length; i++){
             var snap = snapshots[i];
             if (Ext.Array.contains(timeboxValues, snap[timeboxField]) && this.snapSpansDate(snap, targetDate)){
@@ -344,7 +364,7 @@ Ext.define("portfolio-predictability-productivity", {
                             }
                         });
 
-                        console.log('release dates', iteration.EndDate, releaseHash[r].ReleaseStartDate, releaseHash[r].ReleaseDate);
+                      //  console.log('release dates', iteration.EndDate, releaseHash[r].ReleaseStartDate, releaseHash[r].ReleaseDate);
                         var toDateReleaseLength = Rally.util.DateTime.getDifference(iteration.EndDate, releaseHash[r].ReleaseStartDate, 'day'),
                             totalReleaseLength = Rally.util.DateTime.getDifference(releaseHash[r].ReleaseDate, releaseHash[r].ReleaseStartDate, 'day');
 
@@ -554,7 +574,8 @@ Ext.define("portfolio-predictability-productivity", {
                 dataIndex: 'productivity',
                 text: '%',
                 renderer: this.percentRenderer,
-                menuDisabled: true
+                menuDisabled: true,
+                thresholds: this.thresholds.productivity
             }]
         },{
             text: 'Iteration Predictability',
@@ -572,7 +593,8 @@ Ext.define("portfolio-predictability-productivity", {
                 dataIndex: 'predictability',
                 text: '%',
                 renderer: this.percentRenderer,
-                menuDisabled: true
+                menuDisabled: true,
+                thresholds: this.thresholds.predictability
             }]
         },{
             text: 'Release Productivity',
@@ -590,7 +612,8 @@ Ext.define("portfolio-predictability-productivity", {
                 dataIndex: 'releaseProductivity',
                 text: '%',
                 renderer: this.percentRenderer,
-                menuDisabled: true
+                menuDisabled: true,
+                thresholds: this.thresholds.releaseProductivity
             }]
         }];
     },
@@ -663,16 +686,20 @@ Ext.define("portfolio-predictability-productivity", {
         }
         return v;
     },
-    percentRenderer: function(v,m){
-         if (v > .85 && v < 1.15){
-             m.tdCls = 'green-threshold';
-         } else if ((v > .75) && (v < 1.25)){
-             m.tdCls = 'yellow-threshold';
-         } else {
-             m.tdCls = 'red-threshold';
-         }
-        console.log('v',v, m.tdCls);
 
+    percentRenderer: function(v,m,r,row,col){
+        var thresholds = this.columns[col] && this.columns[col].thresholds || null;
+
+        if (thresholds){
+          //  console.log('dataIndex', dataIndex, thresholds);
+            if (v > thresholds.greenLow && v < thresholds.greenHigh){
+                m.tdCls = 'green-threshold';
+            } else if ((v > thresholds.yellowLow) && (v < thresholds.yellowHigh)){
+                m.tdCls = 'yellow-threshold';
+            } else {
+                m.tdCls = 'red-threshold';
+            }
+        }
         return Math.round((v || 0) * 100) + "%";
     },
     showErrorNotification: function(msg){
