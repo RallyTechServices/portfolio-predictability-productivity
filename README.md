@@ -1,14 +1,33 @@
 #Portfolio Predictability Productivity
 
-For a selected Portfolio Item (first 2 levels) and a date range, it shows the following:
+For a selected Portfolio Item (first 2 levels) and a date range, it shows the following numbers for the iterations that end within the selected timebox:
 
-Iteration Productivity
-This shows the number of stories accepted over the number of stories committed to their iteration that ends in the 
+Planned Points for the selected portfolio item and team at the beginning of the Iteration (+Iteration Start Offset if configured via App Settings)
+Accepted Points for the selected portfolio item and team at the end of the Iteration (+Iteration End Offset if configured via App Settings)
+
+Total Task Estimate Units for the selected portfolio item and team at the beginning of the Iteration (+Iteration Start Offset if configured via App Settings)
+Total Task Remaining Units for the selected portfolio item and team at the end of the Iteration (+Iteration End Offset if configured via App Settings)
+
+Planned Points for the Release that spans the iteration timebox and the selected portfolio item and team at the beginning of the Iteration (+Iteration Start Offset if configured via App Settings)
+Accepted Points for the Release that spans the iteration timebox and the selected portfolio item and team at the end of the Iteration (+Iteration End Offset if configured via App Settings)
+
+![ScreenShot](/images/portfolio-predictability-productivity.png)
 
 
+######Assumptions for Release Productivity:
+Releases are aligned with Iteration Boundary in any given project.  
+Releases do not overlap with each other in any given project.
 
+###App Settings
+![ScreenShot](/images/portfolio-predictability-productivity-settings.png)
 
-Iteration Predictability
+#####Offset from Iteration Start (days) 
+Number of days to offset from the actual iteration start (midnight on the Iteration.StartDate in the Workspace time zone) before taking the start snapshot
+
+#####Offset from Iteration End (days) 
+Number of days to offset from the actual iteration end date (11:59:59 PM on the Iteration.EndDate in the Workspace time zone) before taking the end snapshot.  
+
+For both settings, a positive offset will shift the date to after the affected date and negative offset will result in snapshots taken before the affected date
 
 
 ## Development Notes
