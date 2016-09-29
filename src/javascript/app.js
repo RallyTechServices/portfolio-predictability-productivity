@@ -40,7 +40,9 @@ Ext.define("portfolio-predictability-productivity", {
             labelWidth: 100,
             fieldLabel: "Cross Project",
             labelAlign: 'right',
+            remoteFilter: true,
             storeConfig: {
+                pageSize: 200,
                 models: portfolioItemTypes.slice(0,2)
             }
         });
@@ -112,18 +114,16 @@ Ext.define("portfolio-predictability-productivity", {
         }
 
         this.setLoading(true);
-
         Deft.Promise.all([
             this.fetchIterations(startDate, endDate),
             this.fetchReleases(startDate,endDate, pi)
-
         ]).then({
             success: function(iterations){
                 this.fetchStorySnapshots(iterations, pi);
             },
             failure: this.showErrorNotification,
             scope: this
-        });
+        }).always(function(){this.setLoading(false);}, this);
     },
     getFeatureFieldName: function(){
         return this.portfolioItemTypes && this.portfolioItemTypes[0] && this.portfolioItemTypes[0].replace("PortfolioItem/","") || null;
@@ -153,7 +153,7 @@ Ext.define("portfolio-predictability-productivity", {
     fetchIterations: function(startDate, endDate){
         return CArABU.technicalservices.Utility.fetchWsapiRecords({
             model: 'Iteration',
-            fetch: ['Name','ObjectID','StartDate','EndDate'],
+            fetch: ['Name','ObjectID','StartDate','EndDate','Project'],
             context: { project: null },
             filters: [{
                 property: 'EndDate',
@@ -177,20 +177,17 @@ Ext.define("portfolio-predictability-productivity", {
         this.logger.log('fetchReleases', piProperty, pi.get('_type'),this.portfolioItemTypes[1]);
 
         return CArABU.technicalservices.Utility.fetchWsapiRecords({
-            model: 'HierarchicalRequirement',
-            fetch: ['Name','ObjectID','PlanEstimate','AcceptedDate','Project','Release'],
+            model: 'Release',
+            fetch: ['Name','ReleaseStartDate','ReleaseDate','Project','ObjectID'],
             context: { project: null },
             filters: [{
-                property: 'Release.ReleaseDate',
+                property: 'ReleaseDate',
                 operator: "<",
                 value: Rally.util.DateTime.toIsoString(endDate)
             },{
-                property: 'Release.ReleaseDate',
+                property: 'ReleaseDate',
                 operator: ">=",
                 value: Rally.util.DateTime.toIsoString(startDate)
-            },{
-                property: piProperty,
-                value: pi.get('ObjectID')
             }],
             limit: 'Infinity'
         });
@@ -207,13 +204,14 @@ Ext.define("portfolio-predictability-productivity", {
     fetchStorySnapshots: function(iterationsAndReleases, pi){
         this.logger.log('fetchStorySnapshots',iterationsAndReleases, pi);
 
+        this.setLoading(true);
         CArABU.technicalservices.Utility.fetchSnapshots({
                  find: {
                      _TypeHierarchy: 'HierarchicalRequirement',
                      _ItemHierarchy: pi.get('ObjectID'),
                      _ValidTo: {$gte: this.getStartDate()},
                      _ValidFrom: {$lte: this.getEndDate()},
-                     Iteration: {$ne: null}
+                     "$or": [{Iteration: {$ne: null}},{Release: {$ne: null}}]
                  },
                  fetch: this.getStorySnapshotFetchList(),
                  hydrate: ['Project']
@@ -234,192 +232,133 @@ Ext.define("portfolio-predictability-productivity", {
         //this.logger.log('snapSpansDate',snap.ObjectID, validFrom, validTo, targetDate,validFrom < targetDate && validTo > targetDate);
         return validFrom < targetDate && validTo > targetDate;
     },
+    getSnapsForDateAndTimebox: function(snapshots, timeboxField, timeboxValues, targetDate){
+        var filteredSnaps = [];
+
+        if (!Ext.isArray(timeboxValues)){
+            timeboxValues = [timeboxValues];
+        }
+        console.log('getSnapsForData', timeboxField, timeboxValues,snapshots);
+        for (var i=0; i<snapshots.length; i++){
+            var snap = snapshots[i];
+            if (Ext.Array.contains(timeboxValues, snap[timeboxField]) && this.snapSpansDate(snap, targetDate)){
+                filteredSnaps.push(snap)
+            }
+        }
+        return filteredSnaps;
+    },
     processSnapshots: function(snapshots, iterationsAndReleases, pi){
         this.logger.log('processSnapshots', snapshots, iterationsAndReleases, pi);
 
         var iterations = iterationsAndReleases[0],
-            releaseStories = iterationsAndReleases[1];
+            releaseRecords = iterationsAndReleases[1];
 
-        var iterationHash = {};
-        Ext.Array.each(iterations, function(i){
-            iterationHash[i.get('ObjectID')] = i.getData();
-        });
 
-        var projectHash = {};
+        //Organize Snapshots by project
+        var projectHash = {},
+            relevantIterationOids = [],
+            relevantReleaseOids = [];
+
         for (var i=0; i<snapshots.length; i++){
-            var snap = snapshots[i].getData();
 
-            var iteration = iterationHash[snap.Iteration];
+            var snap = snapshots[i].getData(),
+                projectName = snap.Project.Name;
 
-            this.processSnapForTimebox(projectHash, iteration, 'Iteration',snap,'StartDate','EndDate');
+            if (!projectHash[projectName]){
+                projectHash[projectName] = {snaps: []};
+            }
+            projectHash[projectName].snaps.push(snap);
+            if (!Ext.Array.contains(relevantIterationOids, snap.Iteration)){
+                relevantIterationOids.push(snap.Iteration);
+            }if (!Ext.Array.contains(relevantReleaseOids, snap.Release)){
+                relevantReleaseOids.push(snap.Release);
+            }
+        }
 
-            if (iteration){ //We only want to add to our hash if the iteration is relevant
-                var projectName = snap.Project.Name,
+        var iterationHash = {}; //Now we need to filter out only the ones we are interested in
+        Ext.Array.each(iterations, function(i){
+            if (Ext.Array.contains(relevantIterationOids, i.get('ObjectID'))){
+                iterationHash[i.get('ObjectID')] = i.getData();
+            }
+        });
+        var iterations = Ext.Object.getKeys(iterationHash);
+
+        var releaseHash = {},
+            releases = [];
+        Ext.Array.each(releaseRecords, function(i){
+            if (Ext.Array.contains(relevantReleaseOids, i.get('ObjectID'))){
+                //releaseHash[i.get('ObjectID')] = i.getData();
+                releases.push(i.get('ObjectID'));
+            }
+        });
+        this.logger.log('processSnapshots', releases, relevantReleaseOids, releaseRecords);
+
+        Ext.Array.each(iterations, function(i){
+
+            var iteration = iterationHash[i],
+                projectName = iteration && iteration.Project && iteration.Project.Name || "Unknown Iteration " + i;
+
+            if (projectHash[projectName]){
+                var snaps = projectHash[projectName].snaps,
                     adjustedStartDate = Rally.util.DateTime.add(iteration.StartDate,'day',this.getStartDateOffset()),
-                    adjustedEndDate = Rally.util.DateTime.add(iteration.EndDate,'day',this.getEndDateOffset());;
+                    adjustedEndDate = Rally.util.DateTime.add(iteration.EndDate,'day',this.getEndDateOffset()),
+                    startSnaps = this.getSnapsForDateAndTimebox(snaps, 'Iteration', iteration.ObjectID, adjustedStartDate),
+                    endSnaps = this.getSnapsForDateAndTimebox(snaps, 'Iteration', iteration.ObjectID, adjustedEndDate),
+                    releaseStartSnaps = this.getSnapsForDateAndTimebox(snaps, 'Release', releases, adjustedStartDate),
+                    releaseEndSnaps = this.getSnapsForDateAndTimebox(snaps, 'Release', releases, adjustedEndDate);
 
                 if (!projectHash[projectName]){
                     projectHash[projectName] = {};
                 }
 
-                if (!projectHash[projectName][snap.Iteration]){
-                    projectHash[projectName][snap.Iteration] = {
-                        startSnaps: [],
-                        endSnaps: []
-                    }
-                }
+                var plannedPoints = 0,
+                    acceptedPoints = 0,
+                    estimatedTasks = 0,
+                    remainingTasks = 0;
 
-                if (this.snapSpansDate(snap, adjustedStartDate)) {
-                    projectHash[projectName][snap.Iteration].startSnaps.push(snap);
-                }
-                if (this.snapSpansDate(snap, adjustedEndDate)){
-                    projectHash[projectName][snap.Iteration].endSnaps.push(snap);
-                }
+                Ext.Array.each(startSnaps, function(s){
+                    plannedPoints += s.PlanEstimate || 0;
+                    estimatedTasks += s.TaskEstimateTotal || 0;
+                });
+                Ext.Array.each(endSnaps, function(s){
+                    if (s.AcceptedDate){
+                        acceptedPoints += s.PlanEstimate || 0;
+                    }
+                    remainingTasks += s.TaskRemainingTotal || 0;
+                });
+
+                var releasePlannedPoints = 0,
+                    releaseAcceptedPoints = 0;
+                console.log('release', releaseStartSnaps);
+
+                Ext.Array.each(releaseStartSnaps, function(s){
+                    releasePlannedPoints += s.PlanEstimate || 0;
+                });
+                Ext.Array.each(releaseEndSnaps, function(s){
+                    if (s.AcceptedDate){
+                        releaseAcceptedPoints += s.PlanEstimate || 0;
+                    }
+                });
+
+                projectHash[projectName][iteration.ObjectID] = {
+                    startSnaps: startSnaps,
+                    endSnaps: endSnaps,
+                    plannedPoints: plannedPoints,
+                    acceptedPoints: acceptedPoints,
+                    estimatedTasks: estimatedTasks,
+                    remainingTasks: remainingTasks,
+                    releasePlannedPoints: releasePlannedPoints,
+                    releaseAcceptedPoints: releaseAcceptedPoints
+                };
+
             }
-        }
+        }, this);
 
        this.logger.log('projectHash', projectHash);
 
-        //var data = this.buildCustomData(projectHash, releaseStories, pi);
-        //this.addGrid(data);
-        //
-        var data = this.buildCustomTreeData(projectHash, releaseStories, pi, iterationHash);
+        var data = this.buildCustomTreeData(projectHash, releaseHash, pi, iterationHash);
         this.addTreeGrid(data);
 
-    },
-    buildCustomData: function(projectHash, releaseStories, pi){
-        var data = [],
-            totalPlanEstimate = 0,
-            totalAcceptedPlanEstimate = 0,
-            totalTaskPlan = 0,
-            totalTaskToDo = 0,
-            projectReleaseHash = {},
-            totalReleaseAccepted = 0,
-            totalReleasePoints = 0;
-
-
-        for (var i=0; i< releaseStories.length; i++){
-            var story = releaseStories[i].getData(),
-                project = story.Project && story.Project.Name,
-                release = story.Release && story.Release.ObjectID;
-
-            if (project && release){
-                if (!projectReleaseHash[project]){
-                    projectReleaseHash[project] = {};
-                }
-                if (!projectReleaseHash[project][release]){
-                    projectReleaseHash[project][release] = [];
-                }
-                projectReleaseHash[project][release].push(story);
-            } else {
-                this.logger.log('buildCustomData no Release or Project', story);
-            }
-
-
-
-        }
-
-        Ext.Object.each(projectHash, function(projectName, iterations){
-
-            var row = {
-                    project: projectName
-                },
-                plan = 0,
-                accepted = 0,
-                taskPlan = 0,
-                taskToDo = 0;
-
-            Ext.Object.each(iterations, function(iterationId, snaps){
-                Ext.Array.each(snaps.startSnaps, function(s){
-                    plan += s.PlanEstimate || 0;
-                    taskPlan += s.TaskEstimateTotal || 0;
-                });
-
-                Ext.Array.each(snaps.endSnaps, function(s){
-                    if (s.AcceptedDate){
-                        accepted += s.PlanEstimate || 0;
-                    }
-                    taskToDo += s.TaskRemainingTotal || 0;
-                });
-            });
-
-            var releases = projectReleaseHash[projectName];
-            var releaseAccepted = 0,
-                releasePoints = 0;
-            Ext.Object.each(releases, function(releaseId, stories){
-
-                Ext.Array.each(stories, function(s){
-                    if (s.AcceptedDate){
-                        releaseAccepted += s.PlanEstimate;
-                    }
-                    releasePoints += s.PlanEstimate;
-                });
-            });
-
-
-            row.isTotal = false;
-            row.planEstimate = plan;
-            row.acceptedPlanEstimate = accepted;
-            row.taskPlan = taskPlan;
-            row.taskToDo = taskToDo;
-            row.productivity = plan ? accepted/plan : 0;
-            row.predictability = taskPlan ? (taskPlan - taskToDo)/taskPlan : 0;
-
-            row.releaseAccepted = releaseAccepted;
-            row.releasePoints = releasePoints;
-            row.releaseProductivity = releasePoints ? releaseAccepted/releasePoints : 0;
-
-            data.push(row);
-
-
-            totalPlanEstimate += plan;
-            totalAcceptedPlanEstimate += accepted;
-            totalTaskPlan += taskPlan;
-            totalTaskToDo += taskToDo;
-            totalReleaseAccepted += releaseAccepted;
-            totalReleasePoints += releasePoints;
-        });
-        var totalRow = {
-            isTotal: true,
-            project: pi.get('Name'),
-            planEstimate: totalPlanEstimate,
-            acceptedPlanEstimate: totalAcceptedPlanEstimate,
-            taskPlan: totalTaskPlan,
-            taskToDo: totalTaskToDo,
-            productivity: totalPlanEstimate ? totalAcceptedPlanEstimate/totalPlanEstimate : 0,
-            predictability: totalTaskPlan ? (totalTaskPlan - totalTaskToDo)/totalTaskPlan : 0,
-            releaseAccepted: totalReleaseAccepted,
-            releasePoints: totalReleasePoints,
-            releaseProductivity: totalReleasePoints ? totalReleaseAccepted/totalReleasePoints : 0
-        };
-        data.unshift(totalRow);
-        this.logger.log('processSnapshots data' ,data);
-        return data;
-    },
-    processSnapForTimebox: function(projectHash, timebox, timeboxField, snap, startDateField, endDateField){
-        if (timebox){ //We only want to add to our hash if the iteration is relevant
-            var projectName = snap.Project.Name,
-                adjustedStartDate = Rally.util.DateTime.add(timebox[startDateField],'day',this.getStartDateOffset()),
-                adjustedEndDate = Rally.util.DateTime.add(timebox[endDateField],'day',this.getEndDateOffset());;
-           // console.log('in if loop', timebox.Name, projectName, adjustedStartDate, adjustedEndDate);
-            if (!projectHash[projectName]){
-                projectHash[projectName] = {};
-            }
-
-            if (!projectHash[projectName][snap[timeboxField]]){
-                projectHash[projectName][snap[timeboxField]] = {
-                    startSnaps: [],
-                    endSnaps: []
-                }
-            }
-
-            if (this.snapSpansDate(snap, adjustedStartDate)) {
-                projectHash[projectName][snap[timeboxField]].startSnaps.push(snap);
-            }
-            if (this.snapSpansDate(snap, adjustedEndDate)){
-                projectHash[projectName][snap[timeboxField]].endSnaps.push(snap);
-            }
-        }
     },
     addGrid: function(data){
         this.getDisplayBox().add({
@@ -447,145 +386,93 @@ Ext.define("portfolio-predictability-productivity", {
             showRowActionsColumn: false
         });
     },
-    buildCustomTreeData: function(projectHash, releaseStories, pi, iterationData){
+
+    buildCustomTreeData: function(projectHash, releases, pi, iterationHash){
         var data = [],
             totalPlanEstimate = 0,
             totalAcceptedPlanEstimate = 0,
             totalTaskPlan = 0,
             totalTaskToDo = 0,
-            projectReleaseHash = {},
             totalReleaseAccepted = 0,
             totalReleasePoints = 0;
 
+        Ext.Object.each(projectHash, function(projectName, iterationData){
 
-        for (var i=0; i< releaseStories.length; i++){
-            var story = releaseStories[i].getData(),
-                project = story.Project && story.Project.Name,
-                release = story.Release && story.Release.ObjectID;
+                    var row = {
+                            project: projectName,
+                        },
+                        plan = 0,
+                        accepted = 0,
+                        taskPlan = 0,
+                        taskToDo = 0,
+                        releasePlan=0,
+                        releaseAccepted = 0,
+                        children = [];
 
-            if (project && release){
-                if (!projectReleaseHash[project]){
-                    projectReleaseHash[project] = {};
-                }
-                if (!projectReleaseHash[project][release]){
-                    projectReleaseHash[project][release] = [];
-                }
-                projectReleaseHash[project][release].push(story);
-            } else {
-                this.logger.log('buildCustomData no Release or Project', story);
-            }
-        }
+                    Ext.Object.each(iterationData, function(iterationId, data){
+                        if (iterationId !== 'snaps'){
+                            var iterationName = iterationHash[iterationId] && iterationHash[iterationId].Name || "Unkonwn (" + iterationId + ")";
+                            var child = {
+                                project: iterationName,
+                                isTotal: false,
+                                releaseAccepted: data.releaseAcceptedPoints,
+                                releasePoints: data.releasePlannedPoints,
+                                releaseProductivity: 0,
+                                planEstimate: data.plannedPoints,
+                                acceptedPlanEstimate: data.acceptedPoints,
+                                productivity: 0,
+                                taskPlan: data.estimatedTasks,
+                                taskToDo: data.remainingTasks,
+                                predictability: 0,
+                                leaf: true
+                            };
 
-        Ext.Object.each(projectHash, function(projectName, iterations){
-            var row = {
-                    project: projectName,
-                },
-                plan = 0,
-                accepted = 0,
-                taskPlan = 0,
-                taskToDo = 0,
-                children = [];
+                            plan += data.plannedPoints;
+                            accepted += data.acceptedPoints;
+                            taskPlan += data.estimatedTasks;
+                            taskToDo += data.remainingTasks;
+                            releasePlan += data.releasePlannedPoints;
+                            releaseAccepted += data.releaseAcceptedPoints;
 
-            Ext.Object.each(iterations, function(iterationId, snaps){
-                var iterationName = iterationData[iterationId] && iterationData[iterationId].Name || "Unkonwn (" + iterationId + ")";
-                var child = {
-                    project: iterationName,
-                    isTotal: false,
-                        releaseAccepted: null,
-                        releasePoints: null,
-                        releaseProductivity: null,
-                        planEstimate: 0,
-                        acceptedPlanEstimate: 0,
-                        productivity: 0,
-                        taskPlan: 0,
-                        taskToDo: 0,
-                        predictability: 0,
-                        leaf: true
-                    };
+                            if (child.planEstimate){
+                                child.productivity = child.acceptedPlanEstimate/child.planEstimate;
+                            }
+                            if (child.taskPlan){
+                                child.predictability = (child.taskPlan - child.taskToDo)/child.taskPlan;
+                            }
+                            if (child.releasePoints){
+                                child.releaseProductivity = (child.releaseAccepted/child.releasePoints);
+                            }
 
-                Ext.Array.each(snaps.startSnaps, function(s){
-                    child.planEstimate += s.PlanEstimate || 0;
-                    child.taskPlan += s.TaskEstimateTotal || 0;
-                    plan += s.PlanEstimate || 0;
-                    taskPlan += s.TaskEstimateTotal || 0;
-                });
-
-                Ext.Array.each(snaps.endSnaps, function(s){
-                    if (s.AcceptedDate){
-                        child.acceptedPlanEstimate += s.PlanEstimate || 0;
-                        accepted += s.PlanEstimate || 0;
-                    }
-                    child.taskToDo += s.TaskRemainingTotal || 0;
-                    taskToDo += s.TaskRemainingTotal || 0;
-                });
-
-                if (child.planEstimate){
-                    child.productivity = child.acceptedPlanEstimate/child.planEstimate;
-                }
-                if (child.taskPlan){
-                    child.predictability = (child.taskPlan - child.taskToDo)/child.taskPlan;
-                }
-                children.push(child);
-            });
-
-            var releases = projectReleaseHash[projectName];
-            var releaseAccepted = 0,
-                releasePoints = 0;
-            Ext.Object.each(releases, function(releaseId, stories){
-                var releaseName = stories.length > 0 && stories[0].Release && stories[0].Release.Name || "Release " + releaseId;
-
-                var child = {
-                    isTotal: false,
-                    project: releaseName,
-                    releaseAccepted: 0,
-                    releasePoints: 0,
-                    releaseProductivity: 0,
-                    planEstimate: null,
-                    acceptedPlanEstimate: null,
-                    productivity: null,
-                    taskPlan: null,
-                    taskToDo: null,
-                    predictability: null,
-                    leaf: true
-                };
-                Ext.Array.each(stories, function(s){
-                    if (s.AcceptedDate){
-                        child.releaseAccepted += s.PlanEstimate;
-                        releaseAccepted += s.PlanEstimate;
-                    }
-                    child.releasePoints += s.PlanEstimate;
-                    releasePoints += s.PlanEstimate;
-                });
-
-                if (child.releasePoints){
-                    child.releaseProductivity = child.releaseAccepted/child.releasePoints;
-                }
-                children.push(child);
-            });
-
-            row.isTotal = false;
-            row.planEstimate = plan;
-            row.acceptedPlanEstimate = accepted;
-            row.taskPlan = taskPlan;
-            row.taskToDo = taskToDo;
-            row.productivity = plan ? accepted/plan : 0;
-            row.predictability = taskPlan ? (taskPlan - taskToDo)/taskPlan : 0;
-
-            row.releaseAccepted = releaseAccepted;
-            row.releasePoints = releasePoints;
-            row.releaseProductivity = releasePoints ? releaseAccepted/releasePoints : 0;
-            row.children = children;
-
-            data.push(row);
+                            children.push(child);
+                        }
+                    }, this);
 
 
-            totalPlanEstimate += plan;
-            totalAcceptedPlanEstimate += accepted;
-            totalTaskPlan += taskPlan;
-            totalTaskToDo += taskToDo;
-            totalReleaseAccepted += releaseAccepted;
-            totalReleasePoints += releasePoints;
-        });
+                    row.isTotal = false;
+                    row.planEstimate = plan;
+                    row.acceptedPlanEstimate = accepted;
+                    row.taskPlan = taskPlan;
+                    row.taskToDo = taskToDo;
+                    row.productivity = plan ? accepted/plan : 0;
+                    row.predictability = taskPlan ? (taskPlan - taskToDo)/taskPlan : 0;
+
+                    row.releaseAccepted = releaseAccepted;
+                    row.releasePoints = releasePlan;
+                    row.releaseProductivity = releasePlan ? releaseAccepted/releasePlan : 0;
+                    row.children = children;
+
+                    data.push(row);
+
+                    totalPlanEstimate += plan;
+                    totalAcceptedPlanEstimate += accepted;
+                    totalTaskPlan += taskPlan;
+                    totalTaskToDo += taskToDo;
+                    totalReleaseAccepted += releaseAccepted;
+                    totalReleasePoints += releasePlan;
+
+        }, this);
+
         var totalRow = {
             isTotal: true,
             project: pi.get('Name'),
