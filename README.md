@@ -11,6 +11,10 @@ This shows the number of stories accepted over the number of stories committed t
 Iteration Predictability
 
 
+Assumptions for Release Productivity:
+Releases are aligned with Iteration Boundary in any given project.  
+Releases do not overlap with each other in any given project.
+
 ## Development Notes
 
 ### First Load

@@ -287,7 +287,7 @@ Ext.define("portfolio-predictability-productivity", {
             releases = [];
         Ext.Array.each(releaseRecords, function(i){
             if (Ext.Array.contains(relevantReleaseOids, i.get('ObjectID'))){
-                //releaseHash[i.get('ObjectID')] = i.getData();
+                releaseHash[i.get('ObjectID')] = i.getData();
                 releases.push(i.get('ObjectID'));
             }
         });
@@ -303,9 +303,8 @@ Ext.define("portfolio-predictability-productivity", {
                     adjustedStartDate = Rally.util.DateTime.add(iteration.StartDate,'day',this.getStartDateOffset()),
                     adjustedEndDate = Rally.util.DateTime.add(iteration.EndDate,'day',this.getEndDateOffset()),
                     startSnaps = this.getSnapsForDateAndTimebox(snaps, 'Iteration', iteration.ObjectID, adjustedStartDate),
-                    endSnaps = this.getSnapsForDateAndTimebox(snaps, 'Iteration', iteration.ObjectID, adjustedEndDate),
-                    releaseStartSnaps = this.getSnapsForDateAndTimebox(snaps, 'Release', releases, adjustedStartDate),
-                    releaseEndSnaps = this.getSnapsForDateAndTimebox(snaps, 'Release', releases, adjustedEndDate);
+                    endSnaps = this.getSnapsForDateAndTimebox(snaps, 'Iteration', iteration.ObjectID, adjustedEndDate);
+
 
                 if (!projectHash[projectName]){
                     projectHash[projectName] = {};
@@ -327,18 +326,31 @@ Ext.define("portfolio-predictability-productivity", {
                     remainingTasks += s.TaskRemainingTotal || 0;
                 });
 
-                var releasePlannedPoints = 0,
+                var releaseExpectedCompletion = 0,
+                    releasePlannedPoints = 0,
                     releaseAcceptedPoints = 0;
-                console.log('release', releaseStartSnaps);
+                Ext.Array.each(releases, function(r){
 
-                Ext.Array.each(releaseStartSnaps, function(s){
-                    releasePlannedPoints += s.PlanEstimate || 0;
-                });
-                Ext.Array.each(releaseEndSnaps, function(s){
-                    if (s.AcceptedDate){
-                        releaseAcceptedPoints += s.PlanEstimate || 0;
+                    if (releaseHash[r].ReleaseStartDate <= iteration.StartDate && releaseHash[r].ReleaseDate >= iteration.EndDate){
+
+                        var releaseStartSnaps = this.getSnapsForDateAndTimebox(snaps, 'Release', r, adjustedStartDate),
+                            releaseEndSnaps = this.getSnapsForDateAndTimebox(snaps, 'Release', r, adjustedEndDate);
+                        Ext.Array.each(releaseStartSnaps, function(s){
+                            releasePlannedPoints += s.PlanEstimate || 0;
+                        });
+                        Ext.Array.each(releaseEndSnaps, function(s){
+                            if (s.AcceptedDate){
+                                releaseAcceptedPoints += s.PlanEstimate || 0;
+                            }
+                        });
+
+                        console.log('release dates', iteration.EndDate, releaseHash[r].ReleaseStartDate, releaseHash[r].ReleaseDate);
+                        var toDateReleaseLength = Rally.util.DateTime.getDifference(iteration.EndDate, releaseHash[r].ReleaseStartDate, 'day'),
+                            totalReleaseLength = Rally.util.DateTime.getDifference(releaseHash[r].ReleaseDate, releaseHash[r].ReleaseStartDate, 'day');
+
+                        releaseExpectedCompletion = totalReleaseLength > 0 ? toDateReleaseLength/totalReleaseLength : 0;
                     }
-                });
+                }, this);
 
                 projectHash[projectName][iteration.ObjectID] = {
                     startSnaps: startSnaps,
@@ -348,7 +360,8 @@ Ext.define("portfolio-predictability-productivity", {
                     estimatedTasks: estimatedTasks,
                     remainingTasks: remainingTasks,
                     releasePlannedPoints: releasePlannedPoints,
-                    releaseAcceptedPoints: releaseAcceptedPoints
+                    releaseAcceptedPoints: releaseAcceptedPoints,
+                    releaseExpectedCompletion: releaseExpectedCompletion
                 };
 
             }
@@ -431,8 +444,10 @@ Ext.define("portfolio-predictability-productivity", {
                             accepted += data.acceptedPoints;
                             taskPlan += data.estimatedTasks;
                             taskToDo += data.remainingTasks;
-                            releasePlan += data.releasePlannedPoints;
-                            releaseAccepted += data.releaseAcceptedPoints;
+
+                            //This isn't a sum
+                            releasePlan = data.releasePlannedPoints;
+                            releaseAccepted = data.releaseAcceptedPoints;
 
                             if (child.planEstimate){
                                 child.productivity = child.acceptedPlanEstimate/child.planEstimate;
@@ -441,9 +456,9 @@ Ext.define("portfolio-predictability-productivity", {
                                 child.predictability = (child.taskPlan - child.taskToDo)/child.taskPlan;
                             }
                             if (child.releasePoints){
-                                child.releaseProductivity = (child.releaseAccepted/child.releasePoints);
+                                var expectedReleaseCompletion = data.releaseExpectedCompletion * child.releasePoints;
+                                child.releaseProductivity = expectedReleaseCompletion > 0 ? (child.releaseAccepted/expectedReleaseCompletion) : 0;
                             }
-
                             children.push(child);
                         }
                     }, this);
