@@ -11,7 +11,7 @@ Total Task Remaining Units for the selected portfolio item and team at the end o
 Planned Points for the Release that spans the iteration timebox and the selected portfolio item and team at the beginning of the Iteration (+Iteration Start Offset if configured via App Settings)
 Accepted Points for the Release that spans the iteration timebox and the selected portfolio item and team at the end of the Iteration (+Iteration End Offset if configured via App Settings)
 
-![ScreenShot](/images/portfolio-predictability-productivity.png)
+![ScreenShot](/images/portfolio-predictability-productivity1.png)
 
 
 ######Assumptions for Release Productivity:
